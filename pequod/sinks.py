@@ -79,9 +79,14 @@ class GenericWebhookSink(AlertSink):
         payload = {
             "text": alert.text,
             "usd_value": alert.usd_value,
+            "score": alert.score,
+            "score_reasons": alert.score_reasons,
+            "score_breakdown": alert.score_breakdown,
             "tx_id": alert.tx_id,
             "chain": alert.chain,
             "timestamp": alert.timestamp,
+            "entities": alert.entities,
+            "deep_link": alert.deep_link,
             "raw": alert.raw,
         }
         data = json.dumps(payload).encode("utf-8")
@@ -122,4 +127,3 @@ def build_sinks(
     if generic_webhook_url:
         sinks.append(GenericWebhookSink(generic_webhook_url, timeout_seconds))
     return MultiSink(sinks)
-

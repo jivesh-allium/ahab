@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: pequod-dashboard
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: ALLIUM_API_KEY
+        sync: false
+      - key: PEQUOD_DASHBOARD_HOST
+        value: 0.0.0.0
+      - key: PEQUOD_GEO_BOOTSTRAP_MAX_ADDRESSES
+        value: 0
+      - key: PEQUOD_POLL_INTERVAL_SECONDS
+        value: 30
+      - key: PEQUOD_MIN_ALERT_USD
+        value: 10000

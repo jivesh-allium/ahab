@@ -65,29 +65,46 @@ class AlliumClient:
     def wallet_transactions(self, addresses: List[Dict[str, str]]) -> Any:
         return self._request("POST", "/api/v1/developer/wallet/transactions", payload=addresses)
 
+    def wallet_balances(self, addresses: List[Dict[str, str]]) -> Any:
+        return self._request("POST", "/api/v1/developer/wallet/balances", payload=addresses)
+
     def prices(self, tokens: List[Dict[str, str]]) -> List[PriceQuote]:
         if not tokens:
             return []
         response = self._request("POST", "/api/v1/developer/prices", payload=tokens)
-        if not isinstance(response, list):
+        rows: List[Any]
+        if isinstance(response, list):
+            rows = response
+        elif isinstance(response, dict):
+            items = response.get("items")
+            rows = items if isinstance(items, list) else []
+        else:
+            rows = []
+        if not rows:
             return []
 
         quotes: List[PriceQuote] = []
         now = time.time()
-        for item in response:
+        for item in rows:
             if not isinstance(item, dict):
                 continue
             chain = str(item.get("chain", "")).lower()
             token_address = str(item.get("address") or item.get("token_address") or "").lower()
             price = item.get("price")
             symbol = None
+            if isinstance(item.get("symbol"), str):
+                symbol = item.get("symbol")
             info = item.get("info")
             if isinstance(info, dict):
                 symbol = info.get("symbol")
-            if not chain or not token_address or not isinstance(price, (int, float)):
+            if not chain or not token_address or not isinstance(price, (int, float, str)):
                 continue
-            self._price_cache[f"{chain}:{token_address}"] = (float(price), now, symbol)
-            quotes.append(PriceQuote(chain=chain, token_address=token_address, price=float(price), symbol=symbol))
+            try:
+                price_value = float(price)
+            except ValueError:
+                continue
+            self._price_cache[f"{chain}:{token_address}"] = (price_value, now, symbol)
+            quotes.append(PriceQuote(chain=chain, token_address=token_address, price=price_value, symbol=symbol))
         return quotes
 
     def get_cached_price(self, chain: str, token_address: str, ttl_seconds: int = 60) -> Optional[PriceQuote]:
@@ -100,3 +117,38 @@ class AlliumClient:
             return None
         return PriceQuote(chain=chain.lower(), token_address=token_address.lower(), price=price, symbol=symbol)
 
+    def explorer_create_query(self, title: str, sql: str, limit: int = 10_000) -> str:
+        payload = {"title": title, "config": {"sql": sql, "limit": int(limit)}}
+        response = self._request("POST", "/api/v1/explorer/queries", payload=payload)
+        if not isinstance(response, dict):
+            raise AlliumError(f"Unexpected explorer create response: {response!r}")
+        query_id = response.get("query_id")
+        if not isinstance(query_id, str) or not query_id:
+            raise AlliumError(f"Missing query_id in explorer create response: {response!r}")
+        return query_id
+
+    def explorer_run_query_async(self, query_id: str, parameters: Optional[Dict[str, Any]] = None) -> str:
+        payload = {"parameters": parameters or {}}
+        response = self._request("POST", f"/api/v1/explorer/queries/{query_id}/run-async", payload=payload)
+        if not isinstance(response, dict):
+            raise AlliumError(f"Unexpected run-async response: {response!r}")
+        run_id = response.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            raise AlliumError(f"Missing run_id in run-async response: {response!r}")
+        return run_id
+
+    def explorer_query_status(self, run_id: str) -> str:
+        response = self._request("GET", f"/api/v1/explorer/query-runs/{run_id}/status")
+        if isinstance(response, str):
+            return response.strip().strip('"')
+        if isinstance(response, dict):
+            status = response.get("status")
+            if isinstance(status, str):
+                return status
+        return "unknown"
+
+    def explorer_query_results(self, run_id: str) -> Dict[str, Any]:
+        response = self._request("GET", f"/api/v1/explorer/query-runs/{run_id}/results?f=json")
+        if not isinstance(response, dict):
+            raise AlliumError(f"Unexpected results response: {response!r}")
+        return response

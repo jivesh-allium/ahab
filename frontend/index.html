@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pequod Sea Chart</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="sea-backdrop"></div>
+    <main class="layout">
+      <header class="topbar card">
+        <div>
+          <p class="eyebrow">Whale Cartography</p>
+          <h1>Pequod Sea Chart</h1>
+          <p class="subtitle">Live whale traffic, mapped by inferred geography.</p>
+          <p id="moby-quote" class="moby-quote">"Call me Ishmael."</p>
+        </div>
+        <div class="top-controls">
+          <button id="poll-now" class="action">Scout Now</button>
+          <button id="refresh-geo" class="action">Refresh Geo</button>
+          <button id="refresh-balances" class="action soft">Refresh Holdings</button>
+          <p class="hint">Locations refresh daily by default.</p>
+        </div>
+      </header>
+
+      <section class="stats primary-stats">
+        <article class="stat primary card">
+          <p>Watched Whales</p>
+          <h2 id="stat-watch">0</h2>
+        </article>
+        <article class="stat primary card">
+          <p>Alerts (24h)</p>
+          <h2 id="stat-alerts">0</h2>
+        </article>
+        <article class="stat primary card">
+          <p>Events / Min</p>
+          <h2 id="stat-events-per-min">0</h2>
+        </article>
+        <article class="stat primary card">
+          <p>Active Whales (5m)</p>
+          <h2 id="stat-active-whales-5m">0</h2>
+        </article>
+      </section>
+
+      <details class="telemetry card">
+        <summary>Advanced Telemetry</summary>
+        <section class="stats telemetry-stats">
+          <article class="stat">
+            <p>Mapped Whales</p>
+            <h2 id="stat-geo">0</h2>
+          </article>
+          <article class="stat">
+            <p>Last Geo Refresh</p>
+            <h2 id="stat-refresh">-</h2>
+          </article>
+          <article class="stat">
+            <p>Last Holdings Refresh</p>
+            <h2 id="stat-balance-refresh">-</h2>
+          </article>
+          <article class="stat">
+            <p>Events Ingested</p>
+            <h2 id="stat-events-ingested">0</h2>
+          </article>
+          <article class="stat">
+            <p>Usable Events</p>
+            <h2 id="stat-events-usable">0</h2>
+          </article>
+          <article class="stat">
+          <p>Price Miss Rate</p>
+          <h2 id="stat-price-miss-rate">0%</h2>
+          </article>
+        </section>
+      </details>
+
+      <section class="grid">
+        <article class="map-panel card">
+          <div class="panel-head">
+            <h3>Open Ocean Grid</h3>
+            <p>Marker size scales with transfer size. Hover whales for a Pequod citation.</p>
+          </div>
+          <p class="hint geo-hint">Route tags: Geo = mapped, Anchored = inferred near a mapped wallet, Pseudo = fallback only.</p>
+          <div class="controls">
+            <div class="control-group">
+              <span class="control-label">Sea State</span>
+              <span id="sea-state" class="sea-state calm">Calm</span>
+              <span id="sea-score" class="control-value">score 0</span>
+            </div>
+            <div class="control-group">
+              <span class="control-label">Event Types</span>
+              <div id="type-filters" class="chip-row"></div>
+            </div>
+            <div class="control-group">
+              <span class="control-label">Route Quality</span>
+              <div id="route-filters" class="chip-row"></div>
+            </div>
+            <div class="control-group">
+              <span class="control-label">Chains</span>
+              <div id="chain-filters" class="chip-row"></div>
+            </div>
+            <div class="control-group">
+              <label class="control-label" for="window-seconds">Window</label>
+              <input id="window-seconds" class="slider" type="range" min="900" max="86400" step="900" value="3600" />
+              <span id="window-seconds-value" class="control-value">1h</span>
+            </div>
+            <div class="control-group">
+              <label class="control-label" for="min-usd">Min USD</label>
+              <input id="min-usd" class="slider" type="range" min="0" max="2000000" step="10000" value="0" />
+              <span id="min-usd-value" class="control-value">$0</span>
+            </div>
+            <div class="control-group">
+              <button id="pause-live" class="action soft">Pause</button>
+              <label class="control-label" for="replay-offset">Replay Offset</label>
+              <input id="replay-offset" class="slider" type="range" min="0" max="300" step="5" value="0" />
+              <span id="replay-offset-value" class="control-value">Live</span>
+            </div>
+            <div class="control-group view-controls">
+              <span class="control-label">Saved Views</span>
+              <select id="saved-view-select" class="view-select"></select>
+              <button id="save-view" class="action soft tiny">Save</button>
+              <button id="delete-view" class="action soft tiny">Delete</button>
+              <button id="copy-link" class="action soft tiny">Copy Link</button>
+            </div>
+          </div>
+          <div id="focus-event" class="focus-event empty">
+            <div>
+              <p class="focus-title">Route Focus</p>
+              <p class="focus-main">Click any Captain's Log entry to lock and replay that wake.</p>
+            </div>
+          </div>
+          <p id="route-summary" class="hint geo-hint">Showing Geo + Anchored routes. Pseudo routes are hidden.</p>
+          <div id="ocean-map" class="ocean-map">
+            <div class="lat-lines"></div>
+            <div class="lon-lines"></div>
+            <svg id="arc-layer" class="arc-layer" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+            <div id="event-layer" class="event-layer"></div>
+            <div id="marker-layer" class="marker-layer"></div>
+          </div>
+        </article>
+
+        <aside class="feed-panel card">
+          <div class="panel-head">
+            <h3>Captain's Log</h3>
+            <p>Recent whale sightings</p>
+          </div>
+          <p id="feed-status" class="feed-status">Waiting for tides...</p>
+          <ul id="alert-feed" class="alert-feed"></ul>
+        </aside>
+
+        <section class="roster card">
+          <div class="panel-head">
+            <h3>Whale Roster</h3>
+            <p>Most active watchers with geo confidence</p>
+          </div>
+          <div id="whale-cards" class="whale-cards"></div>
+        </section>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

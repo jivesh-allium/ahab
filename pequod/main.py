@@ -68,6 +68,10 @@ def main() -> int:
         max_addresses_per_request=settings.max_addresses_per_request,
         poll_interval_seconds=settings.poll_interval_seconds,
         lookback_seconds=settings.lookback_seconds,
+        auto_discover_counterparties=settings.auto_discover_counterparties,
+        discover_min_usd=settings.discover_min_usd,
+        discovered_watch_max=settings.discovered_watch_max,
+        dashboard_base_url=settings.dashboard_base_url,
     )
 
     try:

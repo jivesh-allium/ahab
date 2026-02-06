@@ -1,0 +1,2 @@
+"""Pequod whale watcher package."""
+

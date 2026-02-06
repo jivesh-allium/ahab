@@ -3,34 +3,43 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 from .env import load_dotenv
 
 
-def _to_int(values: Dict[str, str], key: str, default: int) -> int:
-    value = values.get(key, os.environ.get(key))
+def _pick_value(values: Dict[str, str], key: str, prefer_dotenv: bool = False) -> Optional[str]:
+    if prefer_dotenv:
+        value = values.get(key)
+        if value is not None and value != "":
+            return value
+        return os.environ.get(key)
+    return os.environ.get(key, values.get(key))
+
+
+def _to_int(values: Dict[str, str], key: str, default: int, prefer_dotenv: bool = False) -> int:
+    value = _pick_value(values, key, prefer_dotenv=prefer_dotenv)
     if value is None or value == "":
         return default
     return int(value)
 
 
-def _to_float(values: Dict[str, str], key: str, default: float) -> float:
-    value = values.get(key, os.environ.get(key))
+def _to_float(values: Dict[str, str], key: str, default: float, prefer_dotenv: bool = False) -> float:
+    value = _pick_value(values, key, prefer_dotenv=prefer_dotenv)
     if value is None or value == "":
         return default
     return float(value)
 
 
-def _to_str(values: Dict[str, str], key: str, default: str = "") -> str:
-    value = values.get(key, os.environ.get(key))
+def _to_str(values: Dict[str, str], key: str, default: str = "", prefer_dotenv: bool = False) -> str:
+    value = _pick_value(values, key, prefer_dotenv=prefer_dotenv)
     if value is None:
         return default
     return value
 
 
-def _to_bool(values: Dict[str, str], key: str, default: bool) -> bool:
-    value = values.get(key, os.environ.get(key))
+def _to_bool(values: Dict[str, str], key: str, default: bool, prefer_dotenv: bool = False) -> bool:
+    value = _pick_value(values, key, prefer_dotenv=prefer_dotenv)
     if value is None or value == "":
         return default
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
@@ -57,7 +66,7 @@ class Settings:
 def load_settings(dotenv_path: str = ".env") -> Settings:
     env_values = load_dotenv(dotenv_path)
 
-    api_key = _to_str(env_values, "ALLIUM_API_KEY")
+    api_key = _to_str(env_values, "ALLIUM_API_KEY", prefer_dotenv=True)
     if not api_key:
         raise ValueError("ALLIUM_API_KEY is required. Add it to .env or environment variables.")
 

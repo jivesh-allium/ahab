@@ -621,7 +621,7 @@ class WhalePoller:
                 break
             if not self._is_valid_counterparty(candidate, tx.chain):
                 continue
-            label = f"wake_{candidate[:6]}..{candidate[-4:]}"
+            label = f"{candidate[:6]}..{candidate[-4:]}"
             watch = WatchAddress(chain=tx.chain.lower(), address=candidate, label=label, category="discovered")
             self._watchlist.append(watch)
             self._address_to_chain[candidate] = tx.chain.lower()

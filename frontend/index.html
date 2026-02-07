@@ -130,11 +130,14 @@
           </div>
           <p id="route-summary" class="hint geo-hint">Showing Geo + Anchored routes. Pseudo routes are hidden.</p>
           <div id="ocean-map" class="ocean-map">
-            <div class="lat-lines"></div>
-            <div class="lon-lines"></div>
-            <svg id="arc-layer" class="arc-layer" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
-            <div id="event-layer" class="event-layer"></div>
-            <div id="marker-layer" class="marker-layer"></div>
+            <div id="map-view-state" class="map-view-state" title="Scroll to zoom, drag to pan, double-click to reset">1.0x</div>
+            <div id="map-viewport" class="map-viewport">
+              <div class="lat-lines"></div>
+              <div class="lon-lines"></div>
+              <svg id="arc-layer" class="arc-layer" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+              <div id="event-layer" class="event-layer"></div>
+              <div id="marker-layer" class="marker-layer"></div>
+            </div>
           </div>
         </article>
 

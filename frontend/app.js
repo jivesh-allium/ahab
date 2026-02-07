@@ -18,6 +18,18 @@ const ui = {
   feedMounted: false,
   mapMounted: false,
   initialUrlApplied: false,
+  mapViewport: {
+    scale: 1,
+    x: 0,
+    y: 0,
+    dragging: false,
+    pointerId: null,
+    startClientX: 0,
+    startClientY: 0,
+    startX: 0,
+    startY: 0,
+    lastDragAtMs: 0,
+  },
   savedViews: [],
   replayTimers: [],
   routeFilters: {
@@ -28,11 +40,20 @@ const ui = {
   },
 };
 
+const MAP_MIN_SCALE = 1;
+const MAP_MAX_SCALE = 4.5;
+const MAP_DRAG_CLICK_GUARD_MS = 220;
+const MAP_ZOOM_STEP = 0.0018;
+
 const mapEl = document.getElementById("marker-layer");
 const arcLayerEl = document.getElementById("arc-layer");
 const eventLayerEl = document.getElementById("event-layer");
 const oceanMapEl = document.getElementById("ocean-map");
+const mapViewportEl = document.getElementById("map-viewport");
+const mapViewStateEl = document.getElementById("map-view-state");
 const alertFeedEl = document.getElementById("alert-feed");
+const mapPanelEl = document.querySelector(".map-panel");
+const feedPanelEl = document.querySelector(".feed-panel");
 const feedStatusEl = document.getElementById("feed-status");
 const whaleCardsEl = document.getElementById("whale-cards");
 const pollNowBtn = document.getElementById("poll-now");
@@ -65,6 +86,44 @@ const ROUTE_FILTER_OPTIONS = [
   { value: "unknown", label: "Unknown", hint: "No location confidence available yet." },
 ];
 
+const CHAIN_EXPLORERS = {
+  ethereum: {
+    name: "Etherscan",
+    txPrefix: "https://etherscan.io/tx/",
+    addressPrefix: "https://etherscan.io/address/",
+  },
+  arbitrum: {
+    name: "Arbiscan",
+    txPrefix: "https://arbiscan.io/tx/",
+    addressPrefix: "https://arbiscan.io/address/",
+  },
+  optimism: {
+    name: "Optimistic Etherscan",
+    txPrefix: "https://optimistic.etherscan.io/tx/",
+    addressPrefix: "https://optimistic.etherscan.io/address/",
+  },
+  base: {
+    name: "Basescan",
+    txPrefix: "https://basescan.org/tx/",
+    addressPrefix: "https://basescan.org/address/",
+  },
+  polygon: {
+    name: "Polygonscan",
+    txPrefix: "https://polygonscan.com/tx/",
+    addressPrefix: "https://polygonscan.com/address/",
+  },
+  avalanche: {
+    name: "Snowtrace",
+    txPrefix: "https://snowtrace.io/tx/",
+    addressPrefix: "https://snowtrace.io/address/",
+  },
+  solana: {
+    name: "Solscan",
+    txPrefix: "https://solscan.io/tx/",
+    addressPrefix: "https://solscan.io/account/",
+  },
+};
+
 const FALLBACK_QUOTES = [
   "Call me Ishmael.",
   "There is a wisdom that is woe; but there is a woe that is madness.",
@@ -80,11 +139,91 @@ const SAVED_VIEWS_KEY = "pequod.savedViews.v1";
 
 let mobyQuotes = [];
 let lastQuoteIndex = -1;
+let feedPanelSyncRaf = 0;
+
+function syncFeedPanelHeight() {
+  if (!mapPanelEl || !feedPanelEl) {
+    return;
+  }
+  if (window.matchMedia("(max-width: 980px)").matches) {
+    feedPanelEl.style.removeProperty("height");
+    feedPanelEl.style.removeProperty("max-height");
+    return;
+  }
+  const mapHeight = Math.ceil(mapPanelEl.getBoundingClientRect().height);
+  if (!Number.isFinite(mapHeight) || mapHeight <= 0) {
+    return;
+  }
+  const targetHeight = `${mapHeight}px`;
+  if (feedPanelEl.style.height !== targetHeight) {
+    feedPanelEl.style.height = targetHeight;
+    feedPanelEl.style.maxHeight = targetHeight;
+  }
+}
+
+function scheduleFeedPanelSync() {
+  if (feedPanelSyncRaf) {
+    return;
+  }
+  feedPanelSyncRaf = window.requestAnimationFrame(() => {
+    feedPanelSyncRaf = 0;
+    syncFeedPanelHeight();
+  });
+}
 
 function shortAddr(address) {
   if (!address) return "unknown";
   if (address.length <= 14) return address;
   return `${address.slice(0, 8)}...${address.slice(-6)}`;
+}
+
+function normalizeChain(chain) {
+  return String(chain || "").trim().toLowerCase();
+}
+
+function chainExplorer(chain) {
+  const normalized = normalizeChain(chain);
+  if (!normalized) return null;
+  if (Object.prototype.hasOwnProperty.call(CHAIN_EXPLORERS, normalized)) {
+    return CHAIN_EXPLORERS[normalized];
+  }
+  if (normalized.startsWith("sol")) {
+    return CHAIN_EXPLORERS.solana;
+  }
+  if (normalized.startsWith("eth") || normalized.includes("evm")) {
+    return CHAIN_EXPLORERS.ethereum;
+  }
+  return null;
+}
+
+function txExplorerUrl(chain, txId) {
+  const explorer = chainExplorer(chain);
+  const value = String(txId || "").trim();
+  if (!explorer || !value) return "";
+  return `${explorer.txPrefix}${encodeURIComponent(value)}`;
+}
+
+function addressExplorerUrl(chain, address) {
+  const explorer = chainExplorer(chain);
+  const value = String(address || "").trim();
+  if (!explorer || !value) return "";
+  return `${explorer.addressPrefix}${encodeURIComponent(value)}`;
+}
+
+function explorerName(chain) {
+  const explorer = chainExplorer(chain);
+  return explorer ? explorer.name : "Explorer";
+}
+
+function whaleLabelText(label, fallbackAddress = "") {
+  const raw = String(label || "").trim();
+  const cleaned = raw.replace(/^wake[_\-\s]+/i, "").trim();
+  if (cleaned) return cleaned;
+  return shortAddr(fallbackAddress);
+}
+
+function whaleLabelForDisplay(whale) {
+  return whaleLabelText(whale?.label, whale?.address || "");
 }
 
 function formatUsd(value) {
@@ -333,7 +472,7 @@ function topReasonLabel(item) {
 function entityDisplay(row, fallbackAddress = "") {
   if (row && typeof row === "object") {
     const display = String(row.display_name || row.label || "").trim();
-    if (display) return display;
+    if (display) return whaleLabelText(display, fallbackAddress);
   }
   return shortAddr(fallbackAddress);
 }
@@ -392,6 +531,80 @@ function latToY(lat) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function mapPanBounds(scale = ui.mapViewport.scale) {
+  if (!oceanMapEl) {
+    return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+  }
+  const rect = oceanMapEl.getBoundingClientRect();
+  const width = Number(rect.width || 0);
+  const height = Number(rect.height || 0);
+  if (width <= 0 || height <= 0 || scale <= 1.0001) {
+    return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+  }
+  return {
+    minX: width - width * scale,
+    maxX: 0,
+    minY: height - height * scale,
+    maxY: 0,
+  };
+}
+
+function clampMapPan(x, y, scale = ui.mapViewport.scale) {
+  const bounds = mapPanBounds(scale);
+  return {
+    x: clamp(x, bounds.minX, bounds.maxX),
+    y: clamp(y, bounds.minY, bounds.maxY),
+  };
+}
+
+function applyMapViewportTransform() {
+  if (!mapViewportEl || !oceanMapEl) {
+    return;
+  }
+  const normalizedScale = clamp(ui.mapViewport.scale, MAP_MIN_SCALE, MAP_MAX_SCALE);
+  const normalizedPan = clampMapPan(ui.mapViewport.x, ui.mapViewport.y, normalizedScale);
+  ui.mapViewport.scale = normalizedScale;
+  ui.mapViewport.x = normalizedPan.x;
+  ui.mapViewport.y = normalizedPan.y;
+  mapViewportEl.style.transform = `translate(${ui.mapViewport.x}px, ${ui.mapViewport.y}px) scale(${ui.mapViewport.scale})`;
+  oceanMapEl.classList.toggle("zoomed", ui.mapViewport.scale > 1.0001);
+  if (mapViewStateEl) {
+    mapViewStateEl.textContent = `${ui.mapViewport.scale.toFixed(ui.mapViewport.scale >= 2 ? 2 : 1)}x`;
+  }
+}
+
+function resetMapViewport() {
+  ui.mapViewport.scale = 1;
+  ui.mapViewport.x = 0;
+  ui.mapViewport.y = 0;
+  applyMapViewportTransform();
+}
+
+function zoomMapAtClientPoint(nextScale, clientX, clientY) {
+  if (!oceanMapEl) {
+    return;
+  }
+  const rect = oceanMapEl.getBoundingClientRect();
+  const width = Number(rect.width || 0);
+  const height = Number(rect.height || 0);
+  if (width <= 0 || height <= 0) {
+    return;
+  }
+  const scale = clamp(nextScale, MAP_MIN_SCALE, MAP_MAX_SCALE);
+  const px = clamp(clientX - rect.left, 0, width);
+  const py = clamp(clientY - rect.top, 0, height);
+  const previousScale = ui.mapViewport.scale;
+  const worldX = (px - ui.mapViewport.x) / previousScale;
+  const worldY = (py - ui.mapViewport.y) / previousScale;
+  const nextX = px - worldX * scale;
+  const nextY = py - worldY * scale;
+  const clamped = clampMapPan(nextX, nextY, scale);
+  ui.mapViewport.scale = scale;
+  ui.mapViewport.x = clamped.x;
+  ui.mapViewport.y = clamped.y;
+  applyMapViewportTransform();
 }
 
 function eventIdOf(event) {
@@ -538,8 +751,9 @@ function latestEventForWhale(address) {
 function buildMarkerTitle(whale, quote, clusterHint = "") {
   const lastUsd = hasNumber(whale.last_alert_usd) ? whale.last_alert_usd : null;
   const portfolioUsd = hasNumber(whale.holdings_total_usd) ? whale.holdings_total_usd : null;
+  const displayLabel = whaleLabelForDisplay(whale);
   const lines = [
-    whale.label,
+    displayLabel,
     shortAddr(whale.address),
     `${whale.primary_country || "Unknown country"} ${whale.primary_region ? `(${whale.primary_region})` : ""}`.trim(),
     `Portfolio: ${formatPortfolioUsd(portfolioUsd)}`,
@@ -558,6 +772,7 @@ function renderWhaleMarker(whale, x, y, extraClass = "") {
   const strength = whaleStrengthUsd(whale);
   const lastUsd = hasNumber(whale?.last_alert_usd) ? Number(whale.last_alert_usd) : 0;
   const portfolioUsd = hasNumber(whale?.holdings_total_usd) ? Number(whale.holdings_total_usd) : 0;
+  const displayLabel = whaleLabelForDisplay(whale);
   const size = markerSize(strength);
   const quote = randomQuote();
   marker.className = `whale-marker ${extraClass} ${(lastUsd >= 1000000 || portfolioUsd >= 100000000) ? "hot" : ""}`.trim();
@@ -567,7 +782,7 @@ function renderWhaleMarker(whale, x, y, extraClass = "") {
   marker.style.height = `${size}px`;
   marker.setAttribute(
     "data-label",
-    `${whale.label} • ${whale.primary_country || "unknown waters"} • Portfolio ${formatPortfolioUsd(whale.holdings_total_usd)}`
+    `${displayLabel} • ${whale.primary_country || "unknown waters"} • Portfolio ${formatPortfolioUsd(whale.holdings_total_usd)}`
   );
   marker.title = buildMarkerTitle(whale, quote);
 
@@ -597,7 +812,10 @@ function renderClusterMarker(cluster) {
   marker.style.width = `${size}px`;
   marker.style.height = `${size}px`;
   marker.setAttribute("data-label", `${cluster.whales.length} whales overlap here • click to fan out`);
-  marker.title = `Whale cluster (${cluster.whales.length})\n${cluster.whales.slice(0, 6).map((item) => item.label).join("\n")}\nClick to fan out`;
+  marker.title = `Whale cluster (${cluster.whales.length})\n${cluster.whales
+    .slice(0, 6)
+    .map((item) => whaleLabelForDisplay(item))
+    .join("\n")}\nClick to fan out`;
 
   const sprite = document.createElement("span");
   sprite.className = "sprite";
@@ -672,6 +890,7 @@ function renderMap(whales) {
   if (oceanMapEl) {
     oceanMapEl.classList.toggle("cluster-expanded", Boolean(ui.expandedClusterId));
   }
+  applyMapViewportTransform();
 }
 
 function sanitizePoint(point) {
@@ -876,6 +1095,7 @@ function renderEvents(events) {
       routeTotal: route.routeTotal,
     });
   }
+  scheduleFeedPanelSync();
 }
 
 function findEventForReplay({ eventId, txId }) {
@@ -918,6 +1138,17 @@ function renderFocusEvent(event) {
   const reason = topReasonLabel(event);
   const fromName = entityDisplay(event?.entities?.from, event.from_address);
   const toName = entityDisplay(event?.entities?.to, event.to_address);
+  const explorer = explorerName(event.chain);
+  const txUrl = txExplorerUrl(event.chain, event.tx_id);
+  const fromUrl = addressExplorerUrl(event.chain, event.from_address);
+  const toUrl = addressExplorerUrl(event.chain, event.to_address);
+  const explorerLinks = [
+    txUrl ? `<a class="deep-link" href="${txUrl}" target="_blank" rel="noopener noreferrer">Tx on ${explorer}</a>` : "",
+    fromUrl ? `<a class="deep-link" href="${fromUrl}" target="_blank" rel="noopener noreferrer">From wallet</a>` : "",
+    toUrl ? `<a class="deep-link" href="${toUrl}" target="_blank" rel="noopener noreferrer">To wallet</a>` : "",
+  ]
+    .filter(Boolean)
+    .join(" • ");
   const deepLink = typeof event?.deep_link === "string" ? event.deep_link : "";
   focusEventEl.className = "focus-event active";
   focusEventEl.innerHTML = `
@@ -926,6 +1157,7 @@ function renderFocusEvent(event) {
       <p class="focus-main">${event.event_type || "event"} • ${formatFlowUsd(event.usd_value)} • score ${score.toFixed(1)} • ${String(event.chain || "unknown").toLowerCase()}</p>
       <p class="focus-meta">${fromName} → ${toName} • ${formatAgoFromTs(event.timestamp)} • ${formatTs(event.timestamp)}</p>
       <p class="focus-meta">${reason ? `Driver: ${reason}` : "Driver: flow magnitude"}</p>
+      ${explorerLinks ? `<p class="focus-meta">${explorerLinks}</p>` : ""}
       ${deepLink ? `<a class="deep-link" href="${deepLink}" target="_blank" rel="noopener noreferrer">Open Deep Link</a>` : ""}
     </div>
     <button id="focus-clear" class="action soft tiny">Clear Focus</button>
@@ -1015,7 +1247,19 @@ function renderFeed(alerts) {
     const entities = alert?.entities || {};
     const fromName = entityDisplay(entities.from, alert.from_address);
     const toName = entityDisplay(entities.to, alert.to_address);
+    const txUrl = txExplorerUrl(alert.chain, alert.tx_id);
+    const fromUrl = addressExplorerUrl(alert.chain, alert.from_address);
+    const toUrl = addressExplorerUrl(alert.chain, alert.to_address);
     const deepLink = typeof alert?.deep_link === "string" ? alert.deep_link : "";
+    const txDisplay = txUrl
+      ? `<a class="deep-link" href="${txUrl}" target="_blank" rel="noopener noreferrer">${shortAddr(alert.tx_id)}</a>`
+      : shortAddr(alert.tx_id);
+    const fromDisplay = fromUrl
+      ? `<a class="deep-link" href="${fromUrl}" target="_blank" rel="noopener noreferrer">${fromName}</a>`
+      : fromName;
+    const toDisplay = toUrl
+      ? `<a class="deep-link" href="${toUrl}" target="_blank" rel="noopener noreferrer">${toName}</a>`
+      : toName;
     const selectedClass = eventId && eventId === ui.selectedEventId ? " selected" : "";
     li.className = `alert-item replayable${selectedClass}`;
     li.dataset.eventId = eventId;
@@ -1024,7 +1268,7 @@ function renderFeed(alerts) {
       <p class="usd">${formatFlowUsd(alert.usd_value)}</p>
       <p class="score">Score ${score.toFixed(1)} / 100</p>
       <p class="meta"><span class="geo-badge geo-${geo.cls}">${geo.label}</span> ${alert.event_type || alert.tx_type || "event"} • ${alert.chain} • ${formatTs(alert.timestamp)}</p>
-      <p class="meta">Tx ${shortAddr(alert.tx_id)} • from ${fromName} to ${toName}</p>
+      <p class="meta">Tx ${txDisplay} • from ${fromDisplay} to ${toDisplay}</p>
       ${reason ? `<p class="reason">Driver: ${reason}</p>` : ""}
       <p class="meta replay-hint">Click to replay wake</p>
       ${deepLink ? `<a class="deep-link" href="${deepLink}" target="_blank" rel="noopener noreferrer">Open deep link</a>` : ""}
@@ -1051,10 +1295,13 @@ function mountFeedReplay() {
   ui.feedMounted = true;
   alertFeedEl.addEventListener("click", (event) => {
     const target = event.target;
-    if (target instanceof HTMLElement && target.closest(".deep-link")) {
+    if (!(target instanceof Element)) {
       return;
     }
-    const item = event.target.closest(".alert-item");
+    if (target.closest("a")) {
+      return;
+    }
+    const item = target.closest(".alert-item");
     if (!item) return;
     const replay = findEventForReplay({
       eventId: item.dataset.eventId || "",
@@ -1071,9 +1318,119 @@ function mountMapInteractions() {
     return;
   }
   ui.mapMounted = true;
+  applyMapViewportTransform();
+
+  const finishDrag = (event) => {
+    if (!ui.mapViewport.dragging) {
+      return;
+    }
+    if (
+      event &&
+      typeof event.pointerId === "number" &&
+      typeof ui.mapViewport.pointerId === "number" &&
+      event.pointerId !== ui.mapViewport.pointerId
+    ) {
+      return;
+    }
+    if (
+      event &&
+      typeof event.pointerId === "number" &&
+      typeof oceanMapEl.hasPointerCapture === "function" &&
+      oceanMapEl.hasPointerCapture(event.pointerId)
+    ) {
+      try {
+        oceanMapEl.releasePointerCapture(event.pointerId);
+      } catch (_error) {
+        // Ignore pointer release races.
+      }
+    }
+    ui.mapViewport.dragging = false;
+    ui.mapViewport.pointerId = null;
+    oceanMapEl.classList.remove("dragging");
+  };
+
+  oceanMapEl.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+    const target = event.target;
+    if (target instanceof Element && target.closest(".whale-marker")) {
+      return;
+    }
+    if (target instanceof Element && target.closest(".map-view-state")) {
+      return;
+    }
+    if (ui.mapViewport.scale <= 1.0001) {
+      return;
+    }
+    ui.mapViewport.dragging = true;
+    ui.mapViewport.pointerId = event.pointerId;
+    ui.mapViewport.startClientX = event.clientX;
+    ui.mapViewport.startClientY = event.clientY;
+    ui.mapViewport.startX = ui.mapViewport.x;
+    ui.mapViewport.startY = ui.mapViewport.y;
+    oceanMapEl.classList.add("dragging");
+    if (typeof oceanMapEl.setPointerCapture === "function") {
+      try {
+        oceanMapEl.setPointerCapture(event.pointerId);
+      } catch (_error) {
+        // Ignore pointer capture errors from stale pointers.
+      }
+    }
+    event.preventDefault();
+  });
+
+  oceanMapEl.addEventListener("pointermove", (event) => {
+    if (!ui.mapViewport.dragging || event.pointerId !== ui.mapViewport.pointerId) {
+      return;
+    }
+    const dx = event.clientX - ui.mapViewport.startClientX;
+    const dy = event.clientY - ui.mapViewport.startClientY;
+    const next = clampMapPan(ui.mapViewport.startX + dx, ui.mapViewport.startY + dy, ui.mapViewport.scale);
+    ui.mapViewport.x = next.x;
+    ui.mapViewport.y = next.y;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      ui.mapViewport.lastDragAtMs = Date.now();
+    }
+    applyMapViewportTransform();
+    event.preventDefault();
+  });
+
+  oceanMapEl.addEventListener("pointerup", finishDrag);
+  oceanMapEl.addEventListener("pointercancel", finishDrag);
+  oceanMapEl.addEventListener("lostpointercapture", finishDrag);
+
+  oceanMapEl.addEventListener(
+    "wheel",
+    (event) => {
+      event.preventDefault();
+      const factor = Math.exp(-event.deltaY * MAP_ZOOM_STEP);
+      zoomMapAtClientPoint(ui.mapViewport.scale * factor, event.clientX, event.clientY);
+    },
+    { passive: false }
+  );
+
+  oceanMapEl.addEventListener("dblclick", (event) => {
+    const target = event.target;
+    if (target instanceof Element && target.closest(".whale-marker")) {
+      return;
+    }
+    if (target instanceof Element && target.closest(".map-view-state")) {
+      return;
+    }
+    event.preventDefault();
+    resetMapViewport();
+  });
+
   oceanMapEl.addEventListener("click", (event) => {
     const target = event.target;
-    if (target instanceof HTMLElement && target.closest(".whale-marker")) {
+    if (target instanceof Element && target.closest(".whale-marker")) {
+      return;
+    }
+    if (target instanceof Element && target.closest(".map-view-state")) {
+      return;
+    }
+    if (Date.now() - ui.mapViewport.lastDragAtMs < MAP_DRAG_CLICK_GUARD_MS) {
       return;
     }
     if (!ui.selectedEventId) {
@@ -1150,6 +1507,9 @@ function mountViewControls() {
 function renderWhaleCards(whales) {
   whaleCardsEl.innerHTML = "";
   for (const whale of whales.slice(0, 40)) {
+    const label = whaleLabelForDisplay(whale);
+    const explorer = explorerName(whale.chain);
+    const addressUrl = addressExplorerUrl(whale.chain, whale.address);
     const lastUsd = hasNumber(whale.last_alert_usd) ? whale.last_alert_usd : null;
     const portfolioUsd = hasNumber(whale.holdings_total_usd) ? whale.holdings_total_usd : null;
     const topHoldings = Array.isArray(whale.top_holdings) ? whale.top_holdings : [];
@@ -1165,8 +1525,12 @@ function renderWhaleCards(whales) {
     const div = document.createElement("article");
     div.className = "whale-card";
     div.innerHTML = `
-      <h4>${whale.label}</h4>
-      <p>${shortAddr(whale.address)}</p>
+      <h4>${label}</h4>
+      <p>${
+        addressUrl
+          ? `<a class="deep-link" href="${addressUrl}" target="_blank" rel="noopener noreferrer">${shortAddr(whale.address)}</a> • ${explorer}`
+          : shortAddr(whale.address)
+      }</p>
       <p>${whale.primary_country || "Unknown waters"} ${whale.primary_region ? `• ${whale.primary_region}` : ""}</p>
       <p>Geo confidence: ${whale.confidence || "n/a"}</p>
       <p>Portfolio: ${formatPortfolioUsd(portfolioUsd)} ${whale.holdings_token_count ? `• ${whale.holdings_token_count} tokens` : ""}</p>
@@ -1522,6 +1886,7 @@ async function tick() {
     renderEvents(state.events);
     renderFeed(state.alerts);
     renderWhaleCards(state.whales);
+    scheduleFeedPanelSync();
   } catch (error) {
     console.error(error);
   }
@@ -1540,8 +1905,16 @@ async function boot() {
   mountFeedReplay();
   mountMapInteractions();
   mountViewControls();
+  window.addEventListener("resize", () => {
+    scheduleFeedPanelSync();
+    applyMapViewportTransform();
+  });
+  scheduleFeedPanelSync();
+  applyMapViewportTransform();
   await tick();
   await applyInitialUrlState();
+  scheduleFeedPanelSync();
+  applyMapViewportTransform();
   setInterval(async () => {
     if (ui.paused) {
       return;
